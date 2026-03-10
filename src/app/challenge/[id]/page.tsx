@@ -22,6 +22,7 @@ export default function ChallengePage() {
   } | null>(null);
   const [showHint, setShowHint] = useState(false);
   const [hintIndex, setHintIndex] = useState(0);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const challenge = challenges.find((c) => c.id === params.id);
 
@@ -46,7 +47,7 @@ export default function ChallengePage() {
 
   const isCompleted = currentUser?.completedChallenges.includes(challenge.id);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!currentUser) {
@@ -65,22 +66,27 @@ export default function ChallengePage() {
       return;
     }
 
-    const userAnswer = answer.trim().toLowerCase();
-    const correctAnswer = challenge.answer.trim().toLowerCase();
-
-    if (userAnswer === correctAnswer) {
-      const success = completeChallenge(challenge.id);
-      if (success) {
+    setIsSubmitting(true);
+    try {
+      const result = await completeChallenge(challenge.id, answer.trim());
+      if (result.correct) {
         setFeedback({
           type: "success",
           message: `Correct! You earned ${challenge.points} points!`,
         });
+      } else {
+        setFeedback({
+          type: "error",
+          message: result.message || "Incorrect answer. Try again!",
+        });
       }
-    } else {
+    } catch {
       setFeedback({
         type: "error",
-        message: "Incorrect answer. Try again!",
+        message: "Failed to submit answer. Please try again.",
       });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -230,10 +236,10 @@ export default function ChallengePage() {
             <div className="flex items-center gap-3">
               <button
                 type="submit"
-                disabled={isCompleted || !answer.trim()}
+                disabled={isCompleted || isSubmitting || !answer.trim()}
                 className="px-6 py-2.5 bg-gradient-to-r from-cyan-500 to-green-500 text-gray-900 font-semibold rounded-lg hover:shadow-lg hover:shadow-cyan-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:shadow-none"
               >
-                {isCompleted ? "Completed" : "Submit Answer"}
+                {isCompleted ? "Completed" : isSubmitting ? "Submitting..." : "Submit Answer"}
               </button>
 
               {feedback?.type === "success" && (

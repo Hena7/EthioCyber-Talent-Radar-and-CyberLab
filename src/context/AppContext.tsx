@@ -1,10 +1,23 @@
 'use client';
 
-import React, { createContext, useContext, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useCallback, useMemo, useState, useEffect } from 'react';
 import { User, Challenge, UserProgress, UserRole, Badge } from '@/types';
-import { useLocalStorage } from '@/hooks/useLocalStorage';
-import { defaultChallenges } from '@/data/challenges';
-import { availableBadges } from '@/data/badges';
+import {
+  apiGetCurrentUser,
+  apiGetChallenges,
+  apiGetLeaderboard,
+  apiGetAllProgress,
+  apiRegister,
+  apiLogin,
+  apiSubmitAnswer,
+  apiCreateChallenge,
+  apiUpdateChallenge,
+  apiDeleteChallenge,
+  apiResetLeaderboard,
+  UserResponse,
+  ChallengeResponse,
+  ProgressResponse,
+} from '@/lib/api';
 
 interface AppContextType {
   currentUser: User | null;
@@ -12,226 +25,291 @@ interface AppContextType {
   users: User[];
   challenges: Challenge[];
   userProgress: UserProgress[];
+  isLoading: boolean;
   setRole: (role: UserRole) => void;
-  registerUser: (user: Omit<User, 'id' | 'points' | 'completedChallenges' | 'badges' | 'createdAt'>) => void;
-  loginUser: (username: string) => boolean;
+  registerUser: (user: {
+    fullName: string;
+    username: string;
+    email: string;
+    password: string;
+    age: number;
+    university: string;
+    skills: string[];
+  }) => Promise<boolean>;
+  loginUser: (username: string, password: string) => Promise<boolean>;
   logoutUser: () => void;
-  updateUser: (user: User) => void;
-  completeChallenge: (challengeId: string) => boolean;
-  addChallenge: (challenge: Omit<Challenge, 'id'>) => void;
-  updateChallenge: (challenge: Challenge) => void;
-  deleteChallenge: (challengeId: string) => void;
-  resetLeaderboard: () => void;
+  completeChallenge: (challengeId: string, answer: string) => Promise<{ correct: boolean; message: string }>;
+  addChallenge: (challenge: {
+    title: string;
+    description: string;
+    category: string;
+    difficulty: string;
+    points: number;
+    question: string;
+    answer: string;
+    hints?: string[];
+  }) => Promise<void>;
+  updateChallenge: (challengeId: string, challenge: {
+    title: string;
+    description: string;
+    category: string;
+    difficulty: string;
+    points: number;
+    question: string;
+    answer: string;
+    hints?: string[];
+  }) => Promise<void>;
+  deleteChallenge: (challengeId: string) => Promise<void>;
+  resetLeaderboard: () => Promise<void>;
   getUserRank: (userId: string) => number;
   getLeaderboard: () => User[];
+  refreshData: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
+function mapUserResponse(u: UserResponse): User {
+  return {
+    id: String(u.id),
+    fullName: u.fullName,
+    username: u.username,
+    email: u.email,
+    age: u.age,
+    university: u.university,
+    skills: u.skills,
+    points: u.points,
+    completedChallenges: u.completedChallenges,
+    badges: (u.badges || []).map((b): Badge => ({
+      id: b.id,
+      name: b.name,
+      description: b.description,
+      icon: b.icon,
+      earnedAt: b.earnedAt,
+    })),
+    createdAt: u.createdAt,
+  };
+}
+
+function mapChallengeResponse(c: ChallengeResponse): Challenge {
+  return {
+    id: c.challengeKey,
+    title: c.title,
+    description: c.description,
+    category: c.category as Challenge['category'],
+    difficulty: c.difficulty as Challenge['difficulty'],
+    points: c.points,
+    question: c.question,
+    hints: c.hints,
+  };
+}
+
+function mapProgressResponse(p: ProgressResponse): UserProgress {
+  return {
+    userId: String(p.userId),
+    challengeId: p.challengeId,
+    completed: p.completed,
+    completedAt: p.completedAt,
+    pointsEarned: p.pointsEarned,
+  };
+}
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [users, setUsers] = useLocalStorage<User[]>('users', []);
-  const [challenges, setChallenges] = useLocalStorage<Challenge[]>('challenges', defaultChallenges);
-  const [userProgress, setUserProgress] = useLocalStorage<UserProgress[]>('userProgress', []);
-  const [currentUserId, setCurrentUserId] = useLocalStorage<string | null>('currentUserId', null);
-  const [role, setRole] = useLocalStorage<UserRole>('userRole', 'user');
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [role, setRoleState] = useState<UserRole>('user');
+  const [users, setUsers] = useState<User[]>([]);
+  const [challenges, setChallenges] = useState<Challenge[]>([]);
+  const [userProgress, setUserProgress] = useState<UserProgress[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const currentUser = useMemo(() => {
-    if (!currentUserId) return null;
-    return users.find((u) => u.id === currentUserId) || null;
-  }, [currentUserId, users]);
+  // Check for existing token on mount
+  useEffect(() => {
+    const init = async () => {
+      const token = localStorage.getItem('token');
+      const savedRole = localStorage.getItem('userRole');
+      if (savedRole === 'admin' || savedRole === 'user') {
+        setRoleState(savedRole);
+      }
 
-  const checkAndAwardBadges = useCallback(
-    (user: User, allChallenges: Challenge[]): Badge[] => {
-      const newBadges: Badge[] = [...user.badges];
-      const completedCount = user.completedChallenges.length;
-      const completedChallengeObjects = allChallenges.filter((c) =>
-        user.completedChallenges.includes(c.id)
-      );
+      try {
+        const challengesData = await apiGetChallenges();
+        setChallenges(challengesData.map(mapChallengeResponse));
+      } catch {
+        // challenges may fail silently on first load
+      }
 
-      const badgeChecks: { id: string; condition: boolean }[] = [
-        { id: 'first-challenge', condition: completedCount >= 1 },
-        { id: 'five-challenges', condition: completedCount >= 5 },
-        { id: 'ten-challenges', condition: completedCount >= 10 },
-        {
-          id: 'all-easy',
-          condition:
-            allChallenges.filter((c) => c.difficulty === 'Easy').length > 0 &&
-            allChallenges
-              .filter((c) => c.difficulty === 'Easy')
-              .every((c) => user.completedChallenges.includes(c.id)),
-        },
-        {
-          id: 'all-medium',
-          condition:
-            allChallenges.filter((c) => c.difficulty === 'Medium').length > 0 &&
-            allChallenges
-              .filter((c) => c.difficulty === 'Medium')
-              .every((c) => user.completedChallenges.includes(c.id)),
-        },
-        {
-          id: 'all-hard',
-          condition:
-            allChallenges.filter((c) => c.difficulty === 'Hard').length > 0 &&
-            allChallenges
-              .filter((c) => c.difficulty === 'Hard')
-              .every((c) => user.completedChallenges.includes(c.id)),
-        },
-        {
-          id: 'web-security-master',
-          condition:
-            allChallenges.filter((c) => c.category === 'Web Security').length > 0 &&
-            allChallenges
-              .filter((c) => c.category === 'Web Security')
-              .every((c) => user.completedChallenges.includes(c.id)),
-        },
-        {
-          id: 'crypto-master',
-          condition:
-            allChallenges.filter((c) => c.category === 'Cryptography').length > 0 &&
-            completedChallengeObjects.filter((c) => c.category === 'Cryptography').length ===
-              allChallenges.filter((c) => c.category === 'Cryptography').length,
-        },
-        {
-          id: 'network-master',
-          condition:
-            allChallenges.filter((c) => c.category === 'Networking').length > 0 &&
-            allChallenges
-              .filter((c) => c.category === 'Networking')
-              .every((c) => user.completedChallenges.includes(c.id)),
-        },
-        { id: 'points-500', condition: user.points >= 500 },
-        { id: 'points-1000', condition: user.points >= 1000 },
-      ];
-
-      for (const check of badgeChecks) {
-        if (check.condition && !newBadges.find((b) => b.id === check.id)) {
-          const badgeTemplate = availableBadges.find((b) => b.id === check.id);
-          if (badgeTemplate) {
-            newBadges.push({ ...badgeTemplate, earnedAt: new Date().toISOString() });
-          }
+      if (token) {
+        try {
+          const userData = await apiGetCurrentUser();
+          setCurrentUser(mapUserResponse(userData));
+          setRoleState(userData.role.toLowerCase() as UserRole);
+        } catch {
+          localStorage.removeItem('token');
         }
       }
 
-      return newBadges;
+      try {
+        const leaderboardData = await apiGetLeaderboard();
+        setUsers(leaderboardData.map(mapUserResponse));
+      } catch {
+        // silently fail
+      }
+
+      try {
+        const progressData = await apiGetAllProgress();
+        setUserProgress(progressData.map(mapProgressResponse));
+      } catch {
+        // silently fail
+      }
+
+      setIsLoading(false);
+    };
+
+    init();
+  }, []);
+
+  const refreshData = useCallback(async () => {
+    try {
+      const [challengesData, leaderboardData, progressData] = await Promise.all([
+        apiGetChallenges(),
+        apiGetLeaderboard(),
+        apiGetAllProgress(),
+      ]);
+      setChallenges(challengesData.map(mapChallengeResponse));
+      setUsers(leaderboardData.map(mapUserResponse));
+      setUserProgress(progressData.map(mapProgressResponse));
+
+      const token = localStorage.getItem('token');
+      if (token) {
+        try {
+          const userData = await apiGetCurrentUser();
+          setCurrentUser(mapUserResponse(userData));
+        } catch {
+          // silently fail
+        }
+      }
+    } catch {
+      // silently fail
+    }
+  }, []);
+
+  const setRole = useCallback((newRole: UserRole) => {
+    setRoleState(newRole);
+    localStorage.setItem('userRole', newRole);
+  }, []);
+
+  const registerUser = useCallback(
+    async (userData: {
+      fullName: string;
+      username: string;
+      email: string;
+      password: string;
+      age: number;
+      university: string;
+      skills: string[];
+    }): Promise<boolean> => {
+      const response = await apiRegister(userData);
+      localStorage.setItem('token', response.token);
+      setRoleState(response.role.toLowerCase() as UserRole);
+      localStorage.setItem('userRole', response.role.toLowerCase());
+
+      const fullUser = await apiGetCurrentUser();
+      setCurrentUser(mapUserResponse(fullUser));
+
+      const leaderboardData = await apiGetLeaderboard();
+      setUsers(leaderboardData.map(mapUserResponse));
+
+      return true;
     },
     []
   );
 
-  const registerUser = useCallback(
-    (userData: Omit<User, 'id' | 'points' | 'completedChallenges' | 'badges' | 'createdAt'>) => {
-      const newUser: User = {
-        ...userData,
-        id: `user-${Date.now()}`,
-        points: 0,
-        completedChallenges: [],
-        badges: [],
-        createdAt: new Date().toISOString(),
-      };
-      setUsers((prev) => [...prev, newUser]);
-      setCurrentUserId(newUser.id);
-    },
-    [setUsers, setCurrentUserId]
-  );
-
   const loginUser = useCallback(
-    (username: string): boolean => {
-      const user = users.find((u) => u.username.toLowerCase() === username.toLowerCase());
-      if (user) {
-        setCurrentUserId(user.id);
+    async (username: string, password: string): Promise<boolean> => {
+      try {
+        const response = await apiLogin({ username, password });
+        localStorage.setItem('token', response.token);
+        setRoleState(response.role.toLowerCase() as UserRole);
+        localStorage.setItem('userRole', response.role.toLowerCase());
+
+        const fullUser = await apiGetCurrentUser();
+        setCurrentUser(mapUserResponse(fullUser));
+
         return true;
+      } catch {
+        return false;
       }
-      return false;
     },
-    [users, setCurrentUserId]
+    []
   );
 
   const logoutUser = useCallback(() => {
-    setCurrentUserId(null);
-  }, [setCurrentUserId]);
-
-  const updateUser = useCallback(
-    (updatedUser: User) => {
-      setUsers((prev) => prev.map((u) => (u.id === updatedUser.id ? updatedUser : u)));
-    },
-    [setUsers]
-  );
+    localStorage.removeItem('token');
+    localStorage.removeItem('userRole');
+    setCurrentUser(null);
+    setRoleState('user');
+  }, []);
 
   const completeChallenge = useCallback(
-    (challengeId: string): boolean => {
-      if (!currentUser) return false;
-      if (currentUser.completedChallenges.includes(challengeId)) return false;
-
-      const challenge = challenges.find((c) => c.id === challengeId);
-      if (!challenge) return false;
-
-      const updatedUser: User = {
-        ...currentUser,
-        points: currentUser.points + challenge.points,
-        completedChallenges: [...currentUser.completedChallenges, challengeId],
-      };
-
-      updatedUser.badges = checkAndAwardBadges(updatedUser, challenges);
-
-      // Check top 10 badge
-      const allUsers = users.map((u) => (u.id === updatedUser.id ? updatedUser : u));
-      const sorted = [...allUsers].sort((a, b) => b.points - a.points);
-      const rank = sorted.findIndex((u) => u.id === updatedUser.id) + 1;
-      if (rank <= 10 && !updatedUser.badges.find((b) => b.id === 'top-10')) {
-        const topBadge = availableBadges.find((b) => b.id === 'top-10');
-        if (topBadge) {
-          updatedUser.badges.push({ ...topBadge, earnedAt: new Date().toISOString() });
+    async (challengeId: string, answer: string): Promise<{ correct: boolean; message: string }> => {
+      try {
+        const result = await apiSubmitAnswer(challengeId, answer);
+        if (result.correct) {
+          await refreshData();
         }
+        return result;
+      } catch {
+        return { correct: false, message: 'Failed to submit answer. Please try again.' };
       }
-
-      setUsers((prev) => prev.map((u) => (u.id === updatedUser.id ? updatedUser : u)));
-
-      const progress: UserProgress = {
-        userId: currentUser.id,
-        challengeId,
-        completed: true,
-        completedAt: new Date().toISOString(),
-        pointsEarned: challenge.points,
-      };
-      setUserProgress((prev) => [...prev, progress]);
-
-      return true;
     },
-    [currentUser, challenges, users, checkAndAwardBadges, setUsers, setUserProgress]
+    [refreshData]
   );
 
   const addChallenge = useCallback(
-    (challengeData: Omit<Challenge, 'id'>) => {
-      const newChallenge: Challenge = {
-        ...challengeData,
-        id: `challenge-${Date.now()}`,
-      };
-      setChallenges((prev) => [...prev, newChallenge]);
+    async (challengeData: {
+      title: string;
+      description: string;
+      category: string;
+      difficulty: string;
+      points: number;
+      question: string;
+      answer: string;
+      hints?: string[];
+    }) => {
+      await apiCreateChallenge(challengeData);
+      await refreshData();
     },
-    [setChallenges]
+    [refreshData]
   );
 
   const updateChallenge = useCallback(
-    (updatedChallenge: Challenge) => {
-      setChallenges((prev) =>
-        prev.map((c) => (c.id === updatedChallenge.id ? updatedChallenge : c))
-      );
+    async (challengeId: string, challengeData: {
+      title: string;
+      description: string;
+      category: string;
+      difficulty: string;
+      points: number;
+      question: string;
+      answer: string;
+      hints?: string[];
+    }) => {
+      await apiUpdateChallenge(challengeId, challengeData);
+      await refreshData();
     },
-    [setChallenges]
+    [refreshData]
   );
 
   const deleteChallenge = useCallback(
-    (challengeId: string) => {
-      setChallenges((prev) => prev.filter((c) => c.id !== challengeId));
+    async (challengeId: string) => {
+      await apiDeleteChallenge(challengeId);
+      await refreshData();
     },
-    [setChallenges]
+    [refreshData]
   );
 
-  const resetLeaderboard = useCallback(() => {
-    setUsers((prev) =>
-      prev.map((u) => ({ ...u, points: 0, completedChallenges: [], badges: [] }))
-    );
-    setUserProgress([]);
-  }, [setUsers, setUserProgress]);
+  const resetLeaderboard = useCallback(async () => {
+    await apiResetLeaderboard();
+    await refreshData();
+  }, [refreshData]);
 
   const getLeaderboard = useCallback((): User[] => {
     return [...users].sort((a, b) => b.points - a.points);
@@ -252,11 +330,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       users,
       challenges,
       userProgress,
+      isLoading,
       setRole,
       registerUser,
       loginUser,
       logoutUser,
-      updateUser,
       completeChallenge,
       addChallenge,
       updateChallenge,
@@ -264,6 +342,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       resetLeaderboard,
       getUserRank,
       getLeaderboard,
+      refreshData,
     }),
     [
       currentUser,
@@ -271,11 +350,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       users,
       challenges,
       userProgress,
+      isLoading,
       setRole,
       registerUser,
       loginUser,
       logoutUser,
-      updateUser,
       completeChallenge,
       addChallenge,
       updateChallenge,
@@ -283,6 +362,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       resetLeaderboard,
       getUserRank,
       getLeaderboard,
+      refreshData,
     ]
   );
 
