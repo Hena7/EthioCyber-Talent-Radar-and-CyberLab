@@ -68,18 +68,23 @@ export default function AdminPage() {
     setTimeout(() => setSuccessMessage(""), 3000);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (editingId) {
-      updateChallenge({ ...form, id: editingId });
-      showSuccess("Challenge updated successfully!");
-    } else {
-      addChallenge(form);
-      showSuccess("Challenge created successfully!");
+    try {
+      if (editingId) {
+        await updateChallenge(editingId, form);
+        showSuccess("Challenge updated successfully!");
+      } else {
+        await addChallenge(form);
+        showSuccess("Challenge created successfully!");
+      }
+      setForm(emptyForm);
+      setShowForm(false);
+      setEditingId(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Operation failed";
+      showSuccess(message);
     }
-    setForm(emptyForm);
-    setShowForm(false);
-    setEditingId(null);
   };
 
   const handleEdit = (challenge: Challenge) => {
@@ -90,22 +95,32 @@ export default function AdminPage() {
       difficulty: challenge.difficulty,
       points: challenge.points,
       question: challenge.question,
-      answer: challenge.answer,
+      answer: challenge.answer || "",
     });
     setEditingId(challenge.id);
     setShowForm(true);
   };
 
-  const handleDelete = (id: string) => {
-    deleteChallenge(id);
-    setShowDeleteConfirm(null);
-    showSuccess("Challenge deleted successfully!");
+  const handleDelete = async (id: string) => {
+    try {
+      await deleteChallenge(id);
+      setShowDeleteConfirm(null);
+      showSuccess("Challenge deleted successfully!");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Delete failed";
+      showSuccess(message);
+    }
   };
 
-  const handleReset = () => {
-    resetLeaderboard();
-    setShowResetConfirm(false);
-    showSuccess("Leaderboard reset successfully!");
+  const handleReset = async () => {
+    try {
+      await resetLeaderboard();
+      setShowResetConfirm(false);
+      showSuccess("Leaderboard reset successfully!");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Reset failed";
+      showSuccess(message);
+    }
   };
 
   return (

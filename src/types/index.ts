@@ -20,7 +20,7 @@ export interface Challenge {
   difficulty: 'Easy' | 'Medium' | 'Hard';
   points: number;
   question: string;
-  answer: string;
+  answer?: string;
   hints?: string[];
 }
 
