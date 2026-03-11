@@ -22,12 +22,15 @@ export default function ProfilePage() {
   const { currentUser, registerUser, loginUser } = useApp();
   const [isLogin, setIsLogin] = useState(false);
   const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [form, setForm] = useState({
     fullName: "",
     username: "",
     email: "",
+    password: "",
     age: 20,
     university: "",
     skills: [] as string[],
@@ -55,6 +58,8 @@ export default function ProfilePage() {
     if (!form.email.trim()) newErrors.email = "Email is required";
     else if (!/\S+@\S+\.\S+/.test(form.email))
       newErrors.email = "Invalid email format";
+    if (!form.password || form.password.length < 6)
+      newErrors.password = "Password must be at least 6 characters";
     if (form.age < 20 || form.age > 30)
       newErrors.age = "Age must be between 20 and 30";
     if (!form.university.trim()) newErrors.university = "University is required";
@@ -64,26 +69,40 @@ export default function ProfilePage() {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
-    registerUser(form);
-    router.push("/dashboard");
+    setIsSubmitting(true);
+    try {
+      await registerUser(form);
+      router.push("/dashboard");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Registration failed";
+      setErrors({ general: message });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError("");
     if (!loginUsername.trim()) {
       setLoginError("Username is required");
       return;
     }
-    const success = loginUser(loginUsername);
+    if (!loginPassword.trim()) {
+      setLoginError("Password is required");
+      return;
+    }
+    setIsSubmitting(true);
+    const success = await loginUser(loginUsername, loginPassword);
     if (success) {
       router.push("/dashboard");
     } else {
-      setLoginError("User not found. Please register first.");
+      setLoginError("Invalid username or password.");
     }
+    setIsSubmitting(false);
   };
 
   return (
@@ -94,7 +113,7 @@ export default function ProfilePage() {
         </h1>
         <p className="text-gray-400">
           {isLogin
-            ? "Log in with your username to continue"
+            ? "Log in with your credentials to continue"
             : "Create your profile and start your cybersecurity journey"}
         </p>
       </div>
@@ -128,33 +147,54 @@ export default function ProfilePage() {
       {isLogin ? (
         <form onSubmit={handleLogin} className="space-y-6">
           <div className="bg-gray-800/50 backdrop-blur-sm rounded-xl border border-gray-700/50 p-8">
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">
-                Username
-              </label>
-              <input
-                type="text"
-                value={loginUsername}
-                onChange={(e) => setLoginUsername(e.target.value)}
-                className="w-full px-4 py-3 bg-gray-900/50 border border-gray-700 rounded-lg text-gray-200 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all"
-                placeholder="Enter your username"
-              />
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Username
+                </label>
+                <input
+                  type="text"
+                  value={loginUsername}
+                  onChange={(e) => setLoginUsername(e.target.value)}
+                  className="w-full px-4 py-3 bg-gray-900/50 border border-gray-700 rounded-lg text-gray-200 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all"
+                  placeholder="Enter your username"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  className="w-full px-4 py-3 bg-gray-900/50 border border-gray-700 rounded-lg text-gray-200 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all"
+                  placeholder="Enter your password"
+                />
+              </div>
               {loginError && (
-                <p className="text-red-400 text-sm mt-1">{loginError}</p>
+                <p className="text-red-400 text-sm">{loginError}</p>
               )}
             </div>
 
             <button
               type="submit"
-              className="w-full mt-6 px-6 py-3 bg-gradient-to-r from-cyan-500 to-green-500 text-gray-900 font-semibold rounded-lg hover:shadow-lg hover:shadow-cyan-500/25 transition-all"
+              disabled={isSubmitting}
+              className="w-full mt-6 px-6 py-3 bg-gradient-to-r from-cyan-500 to-green-500 text-gray-900 font-semibold rounded-lg hover:shadow-lg hover:shadow-cyan-500/25 transition-all disabled:opacity-50"
             >
-              Login
+              {isSubmitting ? "Logging in..." : "Login"}
             </button>
           </div>
         </form>
       ) : (
         <form onSubmit={handleRegister} className="space-y-6">
           <div className="bg-gray-800/50 backdrop-blur-sm rounded-xl border border-gray-700/50 p-8 space-y-5">
+            {errors.general && (
+              <div className="px-4 py-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+                <p className="text-red-400 text-sm">{errors.general}</p>
+              </div>
+            )}
+
             {/* Full Name */}
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-2">
@@ -209,6 +249,25 @@ export default function ProfilePage() {
               />
               {errors.email && (
                 <p className="text-red-400 text-sm mt-1">{errors.email}</p>
+              )}
+            </div>
+
+            {/* Password */}
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                Password
+              </label>
+              <input
+                type="password"
+                value={form.password}
+                onChange={(e) =>
+                  setForm((prev) => ({ ...prev, password: e.target.value }))
+                }
+                className="w-full px-4 py-3 bg-gray-900/50 border border-gray-700 rounded-lg text-gray-200 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all"
+                placeholder="Choose a password (min 6 characters)"
+              />
+              {errors.password && (
+                <p className="text-red-400 text-sm mt-1">{errors.password}</p>
               )}
             </div>
 
@@ -285,9 +344,10 @@ export default function ProfilePage() {
 
           <button
             type="submit"
-            className="w-full px-6 py-3 bg-gradient-to-r from-cyan-500 to-green-500 text-gray-900 font-semibold rounded-lg hover:shadow-lg hover:shadow-cyan-500/25 transition-all"
+            disabled={isSubmitting}
+            className="w-full px-6 py-3 bg-gradient-to-r from-cyan-500 to-green-500 text-gray-900 font-semibold rounded-lg hover:shadow-lg hover:shadow-cyan-500/25 transition-all disabled:opacity-50"
           >
-            Create Profile
+            {isSubmitting ? "Creating Profile..." : "Create Profile"}
           </button>
         </form>
       )}
